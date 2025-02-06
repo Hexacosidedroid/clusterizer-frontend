@@ -59,56 +59,6 @@ export const diffContainer = (id: string) =>
 export const statsContainer = (id: string) =>
     apiClientContainer.get(`/stats?id=${id}`, { responseType: "stream" });
 
-export const streamLogsContainer = async (
-    id: string,
-    follow: boolean = true,
-    tail: number | null = null,
-    onData: (log: any) => void
-): Promise<void> => {
-    const params = new URLSearchParams();
-    params.append("id", id);
-    params.append("follow", String(follow));
-    if (tail !== null) {
-        params.append("tail", String(tail));
-    }
-
-    const response = await fetch(`/api/docker/container/local/logContainer?${params.toString()}`, {
-        method: "GET",
-        headers: {
-            "Accept": "application/x-ndjson",
-        },
-    });
-
-    if (!response.body) {
-        throw new Error("ReadableStream not supported in this environment.");
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
-
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split("\n");
-        buffer = lines.pop()!;
-
-        for (const line of lines) {
-            if (line.trim()) {
-                try {
-                    const log = JSON.parse(line);
-                    onData(log);
-                } catch (e) {
-                    console.error("Failed to parse JSON line:", line, e);
-                }
-            }
-        }
-    }
-};
-
 export const createContainer = (data: any) =>
     apiClientContainer.post(`/createContainer`, data);
 

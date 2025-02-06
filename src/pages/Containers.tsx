@@ -1,25 +1,40 @@
-import React, {useEffect, useState} from "react";
-import {Table, Button, message, Space, Modal} from "antd";
+import React, { useEffect, useState, useRef } from "react";
+import { Table, Button, message, Space, Modal } from "antd";
+import { ColumnsType } from "antd/es/table";
+import type { Breakpoint } from "antd/es/_util/responsiveObserve";
 import {
     fetchContainers,
     removeContainer,
     startContainer,
     stopContainer,
     restartContainer,
-    streamLogsContainer
 } from "../api/apiClient";
+import { logContainer as rsocketLogContainer } from "../api/rsocketApi";
+
+interface ContainerData {
+    id: string;
+    image: string;
+    state: string;
+    name: string;
+}
+
+interface RSocketSubscription {
+    request: (n: number) => void;
+    cancel: () => void;
+}
 
 const Containers: React.FC = () => {
-    const [containers, setContainers] = useState([]);
+    const [containers, setContainers] = useState<ContainerData[]>([]);
     const [loading, setLoading] = useState(false);
     const [logsVisible, setLogsVisible] = useState(false);
     const [logsContent, setLogsContent] = useState("");
+    const logSubscriptionRef = useRef<RSocketSubscription | null>(null);
 
     const loadContainers = async () => {
         setLoading(true);
         try {
-            const {data} = await fetchContainers(true);
-            const formattedContainers = data.map((container: any) => ({
+            const { data } = await fetchContainers(true);
+            const formattedContainers: ContainerData[] = data.map((container: any) => ({
                 id: container.Id,
                 image: container.Image,
                 state: container.State,
@@ -31,6 +46,12 @@ const Containers: React.FC = () => {
         } finally {
             setLoading(false);
         }
+    };
+
+    const shortenId = (id: string): string => {
+        const prefix = "sha256:";
+        const trimmed = id.startsWith(prefix) ? id.slice(prefix.length) : id;
+        return trimmed.slice(0, 8);
     };
 
     const handleStart = async (id: string) => {
@@ -73,44 +94,75 @@ const Containers: React.FC = () => {
         }
     };
 
-    const handleViewLogs = async (id: string) => {
+    const handleViewLogs = (id: string) => {
         setLogsContent("");
         setLogsVisible(true);
 
-        try {
-            await streamLogsContainer(id, true, 100, (log) => {
+        rsocketLogContainer("local", {
+            id: id,
+            follow: true,
+            tail: 100,
+        }).subscribe({
+            onSubscribe: (subscription: RSocketSubscription) => {
+                logSubscriptionRef.current = subscription;
+                subscription.request(2147483647);
+            },
+            onNext: (log: unknown) => {
                 setLogsContent((prev) => `${prev}${JSON.stringify(log)}\n`);
-            });
-        } catch (err) {
-            message.error("Failed to fetch container logs");
-            setLogsVisible(false);
+            },
+            onError: (err: Error) => {
+                message.error("Failed to fetch container logs");
+                console.error(err)
+                setLogsVisible(false);
+            },
+            onComplete: () => {
+                console.log("Logs stream completed");
+            },
+        });
+    };
+
+    const handleCloseLogs = () => {
+        setLogsVisible(false);
+        if (logSubscriptionRef.current) {
+            logSubscriptionRef.current.cancel();
+            logSubscriptionRef.current = null;
         }
     };
 
     useEffect(() => {
         loadContainers();
+
+        return () => {
+            if (logSubscriptionRef.current) {
+                logSubscriptionRef.current.cancel();
+            }
+        };
     }, []);
 
-    const columns = [
+    const columns: ColumnsType<ContainerData> = [
         {
             title: "ID",
             dataIndex: "id",
             key: "id",
+            render: (id: string) => shortenId(id),
         },
         {
             title: "Name",
             dataIndex: "name",
             key: "name",
+            responsive: ["md"] as Breakpoint[],
         },
         {
             title: "Image",
             dataIndex: "image",
             key: "image",
+            responsive: ["md"] as Breakpoint[],
         },
         {
             title: "State",
             dataIndex: "state",
             key: "state",
+            responsive: ["md"] as Breakpoint[],
             render: (state: string) => (
                 <span
                     style={{
@@ -118,14 +170,14 @@ const Containers: React.FC = () => {
                         fontWeight: "bold",
                     }}
                 >
-                    {state}
-                </span>
+          {state}
+        </span>
             ),
         },
         {
             title: "Actions",
             key: "actions",
-            render: (_: any, record: any) => (
+            render: (_: unknown, record: ContainerData) => (
                 <Space>
                     {record.state !== "running" && (
                         <Button type="primary" onClick={() => handleStart(record.id)}>
@@ -152,16 +204,22 @@ const Containers: React.FC = () => {
                 columns={columns}
                 rowKey="id"
                 loading={loading}
-                pagination={{pageSize: 5}}
+                pagination={{ pageSize: 5 }}
             />
             <Modal
                 title="Container Logs"
-                visible={logsVisible}
-                onCancel={() => setLogsVisible(false)}
+                open={logsVisible}
+                onCancel={handleCloseLogs}
                 footer={null}
                 width={800}
             >
-                <div style={{ maxHeight: "400px", overflowY: "auto", whiteSpace: "pre-wrap" }}>
+                <div
+                    style={{
+                        maxHeight: "400px",
+                        overflowY: "auto",
+                        whiteSpace: "pre-wrap",
+                    }}
+                >
                     {logsContent
                         .split("\n")
                         .filter((line) => line.trim() !== "")
@@ -170,12 +228,7 @@ const Containers: React.FC = () => {
                                 const log = JSON.parse(line);
                                 const isError = log.type === "STDERR";
                                 return (
-                                    <div
-                                        key={index}
-                                        style={{
-                                            color: isError ? "red" : "inherit",
-                                        }}
-                                    >
+                                    <div key={index} style={{ color: isError ? "red" : "inherit" }}>
                                         {log.payload}
                                     </div>
                                 );
