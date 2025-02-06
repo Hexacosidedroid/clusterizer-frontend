@@ -1,15 +1,13 @@
 import {
-    RSocketClient,
-    JsonSerializers,
     encodeCompositeMetadata,
     encodeRoute,
     MESSAGE_RSOCKET_ROUTING,
+    RSocketClient,
 } from "rsocket-core";
 import RSocketWebSocketClient from "rsocket-websocket-client";
-import { Flowable } from "rsocket-flowable";
+import {Flowable} from "rsocket-flowable";
 
 const rsocketClient = new RSocketClient({
-    serializers: JsonSerializers,
     setup: {
         keepAlive: 60000,
         lifetime: 180000,
@@ -17,30 +15,30 @@ const rsocketClient = new RSocketClient({
         metadataMimeType: "message/x.rsocket.composite-metadata.v0",
     },
     transport: new RSocketWebSocketClient({
-        url: "ws://localhost:8080/rsocket",
+        url: "/rsocket",
+        wsCreator: (url) => new WebSocket(url) as any,
     }),
 });
 
 const connectionPromise: Promise<any> = new Promise((resolve, reject) => {
     rsocketClient.connect().subscribe({
-        onComplete: (s: any) => {
-            resolve(s);
+        onComplete: (socket: any) => {
+            resolve(socket);
         },
-        onError: (error: any) => reject(error),
+        onError: (error: any) => {
+            console.error(error);
+            reject(error);
+        },
         onSubscribe: (cancel: any) => {
             console.log("Подписка на соединение:", cancel);
         },
     });
 });
 
-function createRoutingMetadata(route: string): Uint8Array {
-    return encodeCompositeMetadata([[MESSAGE_RSOCKET_ROUTING, encodeRoute(route)]]);
-}
-
-function requestStream<T>(route: string, data: any): Flowable<T> {
-    const metadata = createRoutingMetadata(route);
+function requestStream<T>(route: string, data: string): Flowable<T> {
     return new Flowable<T>((subscriber) => {
         connectionPromise.then((socket) => {
+            const metadata = encodeCompositeMetadata([[MESSAGE_RSOCKET_ROUTING, encodeRoute(route)]]);
             socket
                 .requestStream({
                     data,
@@ -48,10 +46,15 @@ function requestStream<T>(route: string, data: any): Flowable<T> {
                 })
                 .subscribe({
                     onSubscribe: (subscription: any) => {
-                        subscription.request(Number.MAX_SAFE_INTEGER);
+                        subscription.request(1);
                     },
-                    onNext: (payload: any) => subscriber.onNext(payload.data),
-                    onError: (error: any) => subscriber.onError(error),
+                    onNext: (payload: any) => {
+                        subscriber.onNext(payload.data);
+                    },
+                    onError: (error: any) => {
+                        console.error(error);
+                        subscriber.onError(error);
+                    },
                     onComplete: () => subscriber.onComplete(),
                 });
         });
@@ -60,12 +63,7 @@ function requestStream<T>(route: string, data: any): Flowable<T> {
 
 export function pullImage(configId: string, request: any): Flowable<any> {
     const route = `docker.image.${configId}.pullImage`;
-    return requestStream(route, request);
-}
-
-export function events(configId: string): Flowable<any> {
-    const route = `docker.client.${configId}.events`;
-    return requestStream(route, null);
+    return requestStream(route, JSON.stringify(request));
 }
 
 export function logContainer(
@@ -73,5 +71,6 @@ export function logContainer(
     request: { id: string; follow: boolean; tail?: number }
 ): Flowable<any> {
     const route = `docker.client.${configId}.logContainer`;
-    return requestStream(route, request);
+
+    return requestStream(route, JSON.stringify(request));
 }

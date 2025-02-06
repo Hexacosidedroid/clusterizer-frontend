@@ -11,7 +11,6 @@ import {
 } from "../api/apiClient";
 import { logContainer as rsocketLogContainer } from "../api/rsocketApi";
 
-// Тип данных контейнера
 interface ContainerData {
     id: string;
     image: string;
@@ -19,12 +18,17 @@ interface ContainerData {
     name: string;
 }
 
+interface RSocketSubscription {
+    request: (n: number) => void;
+    cancel: () => void;
+}
+
 const Containers: React.FC = () => {
     const [containers, setContainers] = useState<ContainerData[]>([]);
     const [loading, setLoading] = useState(false);
     const [logsVisible, setLogsVisible] = useState(false);
     const [logsContent, setLogsContent] = useState("");
-    const logSubscriptionRef = useRef<any>(null);
+    const logSubscriptionRef = useRef<RSocketSubscription | null>(null);
 
     const loadContainers = async () => {
         setLoading(true);
@@ -44,7 +48,6 @@ const Containers: React.FC = () => {
         }
     };
 
-    // Функция для сокращения ID до 8 символов (без префикса "sha256:")
     const shortenId = (id: string): string => {
         const prefix = "sha256:";
         const trimmed = id.startsWith(prefix) ? id.slice(prefix.length) : id;
@@ -95,24 +98,27 @@ const Containers: React.FC = () => {
         setLogsContent("");
         setLogsVisible(true);
 
-        const subscription = rsocketLogContainer("local", { id, follow: true, tail: 100 }).subscribe({
-            onSubscribe: (subscription: any) => {
+        rsocketLogContainer("local", {
+            id: id,
+            follow: true,
+            tail: 100,
+        }).subscribe({
+            onSubscribe: (subscription: RSocketSubscription) => {
                 logSubscriptionRef.current = subscription;
-                subscription.request(Number.MAX_SAFE_INTEGER);
+                subscription.request(2147483647);
             },
-            onNext: (log: any) => {
+            onNext: (log: unknown) => {
                 setLogsContent((prev) => `${prev}${JSON.stringify(log)}\n`);
             },
-            onError: (err: any) => {
-                message.error("Failed to fetch container logs", err);
+            onError: (err: Error) => {
+                message.error("Failed to fetch container logs");
+                console.error(err)
                 setLogsVisible(false);
             },
             onComplete: () => {
                 console.log("Logs stream completed");
             },
         });
-
-        logSubscriptionRef.current = subscription;
     };
 
     const handleCloseLogs = () => {
@@ -144,21 +150,26 @@ const Containers: React.FC = () => {
             title: "Name",
             dataIndex: "name",
             key: "name",
-            responsive: ['md'] as Breakpoint[],
+            responsive: ["md"] as Breakpoint[],
         },
         {
             title: "Image",
             dataIndex: "image",
             key: "image",
-            responsive: ['md'] as Breakpoint[],
+            responsive: ["md"] as Breakpoint[],
         },
         {
             title: "State",
             dataIndex: "state",
             key: "state",
-            responsive: ['md'] as Breakpoint[],
+            responsive: ["md"] as Breakpoint[],
             render: (state: string) => (
-                <span style={{ color: state === "running" ? "green" : "red", fontWeight: "bold" }}>
+                <span
+                    style={{
+                        color: state === "running" ? "green" : "red",
+                        fontWeight: "bold",
+                    }}
+                >
           {state}
         </span>
             ),
@@ -166,7 +177,7 @@ const Containers: React.FC = () => {
         {
             title: "Actions",
             key: "actions",
-            render: (_: any, record: ContainerData) => (
+            render: (_: unknown, record: ContainerData) => (
                 <Space>
                     {record.state !== "running" && (
                         <Button type="primary" onClick={() => handleStart(record.id)}>
@@ -197,7 +208,7 @@ const Containers: React.FC = () => {
             />
             <Modal
                 title="Container Logs"
-                visible={logsVisible}
+                open={logsVisible}
                 onCancel={handleCloseLogs}
                 footer={null}
                 width={800}
